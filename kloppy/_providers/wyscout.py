@@ -2,11 +2,15 @@ import json
 from typing import Optional, Union
 
 from kloppy.config import get_config
-from kloppy.domain import EventDataset, EventFactory
+from kloppy.domain import EventDataset, EventFactory, TrackingDataset
 from kloppy.infra.serializers.event.wyscout import (
     WyscoutDeserializerV2,
     WyscoutDeserializerV3,
     WyscoutInputs,
+)
+from kloppy.infra.serializers.tracking.wyscout import (
+    WyscoutTrackingDeserializer,
+    WyscoutTrackingInputs,
 )
 from kloppy.io import FileLike, open_as_file
 from kloppy.utils import github_resolve_raw_data_url
@@ -49,6 +53,47 @@ def load(
 
         return deserializer.deserialize(
             inputs=WyscoutInputs(event_data=event_data_fp),
+        )
+
+
+def load_tracking(
+    raw_data: FileLike,
+    sample_rate: Optional[float] = None,
+    limit: Optional[int] = None,
+    coordinates: Optional[str] = None,
+    pitch_length: float = 105.0,
+    pitch_width: float = 68.0,
+) -> TrackingDataset:
+    """
+    Load Wyscout tracking data.
+
+    The file is a JSONL feed: the first line contains the match metadata and
+    every following line contains one tracking frame. As the feed does not
+    contain lineups, teams and players are derived from the tracking data
+    (players are identified by their jersey number only).
+
+    Args:
+        raw_data: JSONL feed with the raw tracking data of a game.
+        sample_rate: Sampling rate to be applied during deserialization.
+        limit: Limit on the number of frames to process.
+        coordinates: The coordinate system to use.
+        pitch_length: The length of the pitch in meters. The feed does not
+            contain the pitch dimensions, so this defaults to 105.
+        pitch_width: The width of the pitch in meters. Defaults to 68.
+
+    Returns:
+        The parsed tracking data.
+    """
+    deserializer = WyscoutTrackingDeserializer(
+        sample_rate=sample_rate,
+        limit=limit,
+        coordinate_system=coordinates,
+        pitch_length=pitch_length,
+        pitch_width=pitch_width,
+    )
+    with open_as_file(raw_data) as raw_data_fp:
+        return deserializer.deserialize(
+            inputs=WyscoutTrackingInputs(raw_data=raw_data_fp)
         )
 
 
