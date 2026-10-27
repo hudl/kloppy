@@ -12,7 +12,7 @@ from kloppy.infra.serializers.tracking.wyscout import (
     WyscoutTrackingDeserializer,
     WyscoutTrackingInputs,
 )
-from kloppy.io import FileLike, open_as_file
+from kloppy.io import FileLike, Source, open_as_file
 from kloppy.utils import github_resolve_raw_data_url
 
 
@@ -58,6 +58,8 @@ def load(
 
 def load_tracking(
     raw_data: FileLike,
+    players_data: Optional[FileLike] = None,
+    directions_data: Optional[FileLike] = None,
     sample_rate: Optional[float] = None,
     limit: Optional[int] = None,
     coordinates: Optional[str] = None,
@@ -74,6 +76,15 @@ def load_tracking(
 
     Args:
         raw_data: JSONL feed with the raw tracking data of a game.
+        players_data: Optional JSON with the match data from the Wyscout API
+            (`/matches/{wyId}?details=players`). If provided, the teams and
+            players get their Wyscout ids, names and starting status, and the
+            score is set. Otherwise, players are identified by jersey number.
+        directions_data: Optional JSON with the attacking direction of each
+            team per period (`1H`, `2H`, ...), as `leftToRightTeamId` and
+            `rightToLeftTeamId`. Requires `players_data`. If provided, it
+            determines the orientation of the dataset instead of inferring it
+            from the tracking data.
         sample_rate: Sampling rate to be applied during deserialization.
         limit: Limit on the number of frames to process.
         coordinates: The coordinate system to use.
@@ -91,9 +102,19 @@ def load_tracking(
         pitch_length=pitch_length,
         pitch_width=pitch_width,
     )
-    with open_as_file(raw_data) as raw_data_fp:
+    with (
+        open_as_file(raw_data) as raw_data_fp,
+        open_as_file(Source.create(players_data, optional=True)) as players_fp,
+        open_as_file(
+            Source.create(directions_data, optional=True)
+        ) as directions_fp,
+    ):
         return deserializer.deserialize(
-            inputs=WyscoutTrackingInputs(raw_data=raw_data_fp)
+            inputs=WyscoutTrackingInputs(
+                raw_data=raw_data_fp,
+                players_data=players_fp,
+                directions_data=directions_fp,
+            )
         )
 
 

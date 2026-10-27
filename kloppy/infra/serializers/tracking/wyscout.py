@@ -15,6 +15,7 @@ from kloppy.domain import (
     Point,
     Point3D,
     Provider,
+    Score,
     Team,
     TrackingDataset,
     attacking_directions_from_multi_frames,
@@ -32,8 +33,13 @@ DEFAULT_PITCH_LENGTH = 105.0
 DEFAULT_PITCH_WIDTH = 68.0
 
 
+PERIOD_KEYS = {"1H": 1, "2H": 2, "E1": 3, "E2": 4}
+
+
 class WyscoutTrackingInputs(NamedTuple):
     raw_data: IO[bytes]
+    players_data: Optional[IO[bytes]] = None
+    directions_data: Optional[IO[bytes]] = None
 
 
 class WyscoutTrackingDeserializer(
@@ -44,8 +50,12 @@ class WyscoutTrackingDeserializer(
 
     The first line of the file is a header with the match metadata. Every
     following line is a single tracking frame. The file does not contain
-    lineups, so teams and players are derived from the data: players are
-    identified by their jersey number only.
+    lineups, so by default teams and players are derived from the data:
+    players are identified by their jersey number only.
+
+    Optionally, the match data from the Wyscout API (with the lineups and
+    players) and the attacking directions can be provided. They are used to
+    add real team ids, player ids and names, the score, and the orientation.
     """
 
     def __init__(
@@ -72,15 +82,7 @@ class WyscoutTrackingDeserializer(
         If the team names can be read from it, the first one is assumed to be
         the home team. Otherwise, generic names are used.
         """
-        names = {Ground.HOME: "Home", Ground.AWAY: "Away"}
-        label = (header.get("metadata") or {}).get("label")
-        if label:
-            parts = label.rsplit(",", 1)[0].split(" - ")
-            if len(parts) == 2 and all(p.strip() for p in parts):
-                names = {
-                    Ground.HOME: parts[0].strip(),
-                    Ground.AWAY: parts[1].strip(),
-                }
+        names = WyscoutTrackingDeserializer._team_names_from_label(header)
 
         return [
             Team(
@@ -107,6 +109,126 @@ class WyscoutTrackingDeserializer(
             team.players.append(player)
             players[key] = player
         return player
+
+    @staticmethod
+    def _team_names_from_label(header: dict) -> dict[Ground, str]:
+        names = {Ground.HOME: "Home", Ground.AWAY: "Away"}
+        label = (header.get("metadata") or {}).get("label")
+        if label:
+            parts = label.rsplit(",", 1)[0].split(" - ")
+            if len(parts) == 2 and all(p.strip() for p in parts):
+                names = {
+                    Ground.HOME: parts[0].strip(),
+                    Ground.AWAY: parts[1].strip(),
+                }
+        return names
+
+    def _create_teams_from_match_data(
+        self, header: dict, match_data: dict
+    ) -> tuple[list[Team], dict[tuple[str, int], Player], Optional[Score]]:
+        """Create teams and players from the Wyscout match data."""
+        names = self._team_names_from_label(header)
+        teams_data = match_data["teamsData"]
+        teams = {}
+        players = {}
+        scores = {}
+        for team_data in teams_data.values():
+            ground = Ground.HOME if team_data["side"] == "home" else Ground.AWAY
+            team = Team(
+                team_id=str(team_data["teamId"]),
+                name=names[ground],
+                ground=ground,
+            )
+            formation = team_data.get("formation") or {}
+            for starting, key in ((True, "lineup"), (False, "bench")):
+                for entry in formation.get(key) or []:
+                    info = entry.get("player") or {}
+                    jersey_no = int(entry["shirtNumber"])
+                    player = Player(
+                        player_id=str(entry["playerId"]),
+                        team=team,
+                        jersey_no=jersey_no,
+                        first_name=info.get("firstName") or None,
+                        last_name=info.get("lastName") or None,
+                        name=info.get("shortName") or None,
+                        starting=starting,
+                    )
+                    team.players.append(player)
+                    players[(team.team_id, jersey_no)] = player
+            teams[ground] = team
+            scores[ground] = team_data.get("score")
+
+        if set(teams) != {Ground.HOME, Ground.AWAY}:
+            raise ValueError(
+                "The match data must contain exactly one home and one away team"
+            )
+        score = None
+        if scores[Ground.HOME] is not None and scores[Ground.AWAY] is not None:
+            score = Score(home=scores[Ground.HOME], away=scores[Ground.AWAY])
+        return [teams[Ground.HOME], teams[Ground.AWAY]], players, score
+
+    @staticmethod
+    def _orientation_from_directions(
+        directions: dict, teams: list[Team]
+    ) -> Optional[Orientation]:
+        """Derive the orientation from the attacking directions per period."""
+        home_id, away_id = (t.team_id for t in teams)
+
+        def ltr_ground(key: str) -> Optional[Ground]:
+            ltr = (directions.get(key) or {}).get("leftToRightTeamId")
+            if ltr is None:
+                return None
+            if str(ltr) == home_id:
+                return Ground.HOME
+            if str(ltr) == away_id:
+                return Ground.AWAY
+            return None
+
+        first, second = ltr_ground("1H"), ltr_ground("2H")
+        if first is None:
+            return None
+        if second is None or second != first:
+            return (
+                Orientation.HOME_AWAY
+                if first == Ground.HOME
+                else Orientation.AWAY_HOME
+            )
+        return (
+            Orientation.STATIC_HOME_AWAY
+            if first == Ground.HOME
+            else Orientation.STATIC_AWAY_HOME
+        )
+
+    def _get_orientation(
+        self,
+        directions: Optional[dict],
+        teams: list[Team],
+        frames: list,
+        periods: list[Period],
+    ) -> Orientation:
+        """Get the orientation of the dataset.
+
+        The attacking directions are used when available. Otherwise, the
+        orientation is inferred from the player positions in the first period.
+        """
+        if directions:
+            orientation = self._orientation_from_directions(directions, teams)
+            if orientation is not None:
+                return orientation
+
+        attacking_directions = attacking_directions_from_multi_frames(
+            frames, periods
+        )
+        first_direction = attacking_directions[periods[0].id]
+        if first_direction == AttackingDirection.LTR:
+            return Orientation.HOME_AWAY
+        if first_direction == AttackingDirection.RTL:
+            return Orientation.AWAY_HOME
+
+        warnings.warn(
+            "Could not determine orientation of dataset, defaulting to NOT_SET"
+        )
+        return Orientation.NOT_SET
 
     @staticmethod
     def _parse_date(header: dict) -> Optional[datetime]:
@@ -177,8 +299,24 @@ class WyscoutTrackingDeserializer(
             pitch_length=self.pitch_length, pitch_width=self.pitch_width
         )
 
+        match_data = (
+            json.load(inputs.players_data) if inputs.players_data else None
+        )
+        directions = (
+            json.load(inputs.directions_data)
+            if inputs.directions_data
+            else None
+        )
+        if directions is not None and match_data is None:
+            warnings.warn(
+                "Attacking directions are ignored because they cannot be "
+                "mapped to the home and away team without the players data"
+            )
+            directions = None
+
         header = None
         teams = None
+        score = None
         players: dict[tuple[str, int], Player] = {}
         periods: dict[int, Period] = {}
         frames = []
@@ -196,7 +334,14 @@ class WyscoutTrackingDeserializer(
                     header = raw_frame
                     continue
                 if teams is None:
-                    teams = self._create_teams(header or {})
+                    if match_data is not None:
+                        teams, players, score = (
+                            self._create_teams_from_match_data(
+                                header or {}, match_data
+                            )
+                        )
+                    else:
+                        teams = self._create_teams(header or {})
 
                 period_id = raw_frame["period"]
                 video_time = raw_frame["videoTimeMs"]
@@ -238,19 +383,9 @@ class WyscoutTrackingDeserializer(
             frame_rate = round(1000 / (video_times[1] - video_times[0]))
 
         periods_list = list(periods.values())
-        attacking_directions = attacking_directions_from_multi_frames(
-            frames, periods_list
+        orientation = self._get_orientation(
+            directions, teams, frames, periods_list
         )
-        first_direction = attacking_directions[periods_list[0].id]
-        if first_direction == AttackingDirection.LTR:
-            orientation = Orientation.HOME_AWAY
-        elif first_direction == AttackingDirection.RTL:
-            orientation = Orientation.AWAY_HOME
-        else:
-            warnings.warn(
-                "Could not determine orientation of dataset, defaulting to NOT_SET"
-            )
-            orientation = Orientation.NOT_SET
 
         coordinate_system = transformer.get_to_coordinate_system()
         metadata = Metadata(
@@ -262,6 +397,7 @@ class WyscoutTrackingDeserializer(
             coordinate_system=coordinate_system,
             flags=None,
             provider=Provider.WYSCOUT,
+            score=score,
             game_id=header.get("gameRefId"),
             date=self._parse_date(header),
         )

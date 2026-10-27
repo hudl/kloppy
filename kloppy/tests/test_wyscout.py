@@ -26,6 +26,7 @@ from kloppy.domain import (
     Point3D,
     PositionType,
     Provider,
+    Score,
     SetPieceQualifier,
     SetPieceType,
     ShotResult,
@@ -524,3 +525,90 @@ class TestWyscoutTracking:
         )
         assert dataset.metadata.pitch_dimensions.pitch_length == 100
         assert dataset.metadata.pitch_dimensions.pitch_width == 60
+
+
+class TestWyscoutTrackingWithMatchData:
+    """Tests for tracking data loaded with players and directions data."""
+
+    @pytest.fixture(scope="class")
+    def raw_data(self, base_dir: Path) -> Path:
+        return base_dir / "files" / "wyscout_tracking_subset.jsonl"
+
+    @pytest.fixture(scope="class")
+    def players_data(self, base_dir: Path) -> Path:
+        return base_dir / "files" / "wyscout_tracking_players.json"
+
+    @pytest.fixture(scope="class")
+    def directions_data(self, base_dir: Path) -> Path:
+        return base_dir / "files" / "wyscout_tracking_directions.json"
+
+    @pytest.fixture(scope="class")
+    def dataset(self, raw_data, players_data, directions_data):
+        return wyscout.load_tracking(
+            raw_data,
+            players_data=players_data,
+            directions_data=directions_data,
+            coordinates="wyscout",
+        )
+
+    def test_teams(self, dataset: TrackingDataset):
+        home_team, away_team = dataset.metadata.teams
+        assert (home_team.team_id, home_team.name) == ("1609", "Arsenal")
+        assert (away_team.team_id, away_team.name) == ("1610", "Chelsea")
+        assert home_team.ground == Ground.HOME
+        assert away_team.ground == Ground.AWAY
+        assert len(home_team.players) == 20
+        assert len(away_team.players) == 20
+
+    def test_players(self, dataset: TrackingDataset):
+        home_team = dataset.metadata.teams[0]
+        player = home_team.get_player_by_id("388986")
+        assert player.jersey_no == 14
+        assert player.name == "V. Gyökeres"
+        assert player.first_name == "Viktor"
+        assert player.starting is True
+        assert home_team.get_player_by_jersey_number(9).starting is False
+
+    def test_frames_use_named_players(self, dataset: TrackingDataset):
+        home_team = dataset.metadata.teams[0]
+        player = home_team.get_player_by_jersey_number(7)
+        assert player.name == "B. Saka"
+        frame = dataset.records[0]
+        assert frame.players_data[player].coordinates == Point(
+            0.326534, 23.844245
+        )
+        assert all(p.player_id.isdigit() for p in frame.players_data), (
+            "all tracked players should be matched to Wyscout players"
+        )
+
+    def test_score_and_orientation(self, dataset: TrackingDataset):
+        assert dataset.metadata.score == Score(home=2, away=1)
+        assert dataset.metadata.orientation == Orientation.AWAY_HOME
+
+    def test_directions_override_inferred_orientation(
+        self, raw_data, players_data, tmp_path
+    ):
+        directions = tmp_path / "directions.json"
+        directions.write_text(
+            '{"1H": {"leftToRightTeamId": 1609, "rightToLeftTeamId": 1610},'
+            '"2H": {"leftToRightTeamId": 1609, "rightToLeftTeamId": 1610}}'
+        )
+        dataset = wyscout.load_tracking(
+            raw_data, players_data=players_data, directions_data=directions
+        )
+        assert dataset.metadata.orientation == Orientation.STATIC_HOME_AWAY
+
+    def test_players_data_without_directions(self, raw_data, players_data):
+        dataset = wyscout.load_tracking(raw_data, players_data=players_data)
+        assert dataset.metadata.teams[0].team_id == "1609"
+        assert dataset.metadata.orientation == Orientation.AWAY_HOME
+
+    def test_directions_without_players_are_ignored(
+        self, raw_data, directions_data
+    ):
+        with pytest.warns(UserWarning, match="directions are ignored"):
+            dataset = wyscout.load_tracking(
+                raw_data, directions_data=directions_data
+            )
+        assert dataset.metadata.teams[0].team_id == "home"
+        assert dataset.metadata.score is None
