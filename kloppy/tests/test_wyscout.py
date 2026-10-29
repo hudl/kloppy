@@ -439,10 +439,8 @@ class TestWyscoutTracking:
         assert metadata.provider == Provider.WYSCOUT
         assert dataset.dataset_type == DatasetType.TRACKING
         assert metadata.frame_rate == 25
-        assert metadata.game_id == "5711902"
-        assert metadata.date == datetime(
-            2026, 3, 1, 16, 30, tzinfo=timezone.utc
-        )
+        assert metadata.game_id == "1000001"
+        assert metadata.date == datetime(2000, 1, 1, 15, 0, tzinfo=timezone.utc)
         assert metadata.orientation == Orientation.AWAY_HOME
         assert metadata.pitch_dimensions.pitch_length == 105
         assert metadata.pitch_dimensions.pitch_width == 68
@@ -452,8 +450,8 @@ class TestWyscoutTracking:
 
     def test_teams_and_players(self, dataset: TrackingDataset):
         home_team, away_team = dataset.metadata.teams
-        assert (home_team.name, home_team.ground) == ("Arsenal", Ground.HOME)
-        assert (away_team.name, away_team.ground) == ("Chelsea", Ground.AWAY)
+        assert (home_team.name, home_team.ground) == ("Home Team", Ground.HOME)
+        assert (away_team.name, away_team.ground) == ("Away Team", Ground.AWAY)
         assert sorted(p.jersey_no for p in home_team.players) == [
             2, 5, 6, 7, 10, 12, 14, 19, 36, 41,
         ]  # fmt: skip
@@ -574,8 +572,8 @@ class TestWyscoutTrackingWithMatchData:
 
     def test_teams(self, dataset: TrackingDataset):
         home_team, away_team = dataset.metadata.teams
-        assert (home_team.team_id, home_team.name) == ("1609", "Arsenal")
-        assert (away_team.team_id, away_team.name) == ("1610", "Chelsea")
+        assert (home_team.team_id, home_team.name) == ("1001", "Home Team")
+        assert (away_team.team_id, away_team.name) == ("1002", "Away Team")
         assert home_team.ground == Ground.HOME
         assert away_team.ground == Ground.AWAY
         assert len(home_team.players) == 20
@@ -583,17 +581,17 @@ class TestWyscoutTrackingWithMatchData:
 
     def test_players(self, dataset: TrackingDataset):
         home_team = dataset.metadata.teams[0]
-        player = home_team.get_player_by_id("388986")
+        player = home_team.get_player_by_id("100003")
         assert player.jersey_no == 14
-        assert player.name == "V. Gyökeres"
-        assert player.first_name == "Viktor"
+        assert player.name == "H. Player14"
+        assert player.first_name == "Home"
         assert player.starting is True
         assert home_team.get_player_by_jersey_number(9).starting is False
 
     def test_frames_use_named_players(self, dataset: TrackingDataset):
         home_team = dataset.metadata.teams[0]
         player = home_team.get_player_by_jersey_number(7)
-        assert player.name == "B. Saka"
+        assert player.name == "H. Player7"
         frame = dataset.records[0]
         assert frame.players_data[player].coordinates == Point(
             0.326534, 23.844245
@@ -611,8 +609,8 @@ class TestWyscoutTrackingWithMatchData:
     ):
         directions = tmp_path / "directions.json"
         directions.write_text(
-            '{"1H": {"leftToRightTeamId": 1609, "rightToLeftTeamId": 1610},'
-            '"2H": {"leftToRightTeamId": 1609, "rightToLeftTeamId": 1610}}'
+            '{"1H": {"leftToRightTeamId": 1001, "rightToLeftTeamId": 1002},'
+            '"2H": {"leftToRightTeamId": 1001, "rightToLeftTeamId": 1002}}'
         )
         dataset = wyscout.load_tracking(
             raw_data, players_data=players_data, directions_data=directions
@@ -621,7 +619,7 @@ class TestWyscoutTrackingWithMatchData:
 
     def test_players_data_without_directions(self, raw_data, players_data):
         dataset = wyscout.load_tracking(raw_data, players_data=players_data)
-        assert dataset.metadata.teams[0].team_id == "1609"
+        assert dataset.metadata.teams[0].team_id == "1001"
         assert dataset.metadata.orientation == Orientation.AWAY_HOME
 
     def test_directions_without_players_are_ignored(
