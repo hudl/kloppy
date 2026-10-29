@@ -13,10 +13,10 @@ from kloppy.infra.serializers.tracking.wyscout import (
     WyscoutTrackingInputs,
 )
 from kloppy.io import FileLike, Source, open_as_file
-from kloppy.utils import github_resolve_raw_data_url
+from kloppy.utils import deprecated, github_resolve_raw_data_url
 
 
-def load(
+def load_event(
     event_data: FileLike,
     event_types: Optional[list[str]] = None,
     coordinates: Optional[str] = None,
@@ -118,6 +118,23 @@ def load_tracking(
         )
 
 
+@deprecated("wyscout.load_event should be used")
+def load(
+    event_data: FileLike,
+    event_types: Optional[list[str]] = None,
+    coordinates: Optional[str] = None,
+    event_factory: Optional[EventFactory] = None,
+    data_version: Optional[str] = None,
+) -> EventDataset:
+    return load_event(
+        event_data,
+        event_types,
+        coordinates,
+        event_factory,
+        data_version,
+    )
+
+
 def load_open_data(
     match_id: Union[str, int] = "2499841",
     event_types: Optional[list[str]] = None,
@@ -145,7 +162,7 @@ def load_open_data(
     References:
         [1] Pappalardo, L., Cintia, P., Rossi, A. et al. A public data set of spatio-temporal match events in soccer competitions. Sci Data 6, 236 (2019). https://doi.org/10.1038/s41597-019-0247-7
     """
-    return load(
+    return load_event(
         event_data=github_resolve_raw_data_url(
             repository="koenvo/wyscout-soccer-match-event-dataset",
             branch="main",

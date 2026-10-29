@@ -55,6 +55,27 @@ def test_correct_auto_recognize_deserialization(
     assert dataset.records[2].coordinates == Point(32.0, 56.0)
 
 
+def test_load_event(event_v2_data: Path, event_v3_data: Path):
+    dataset = wyscout.load_event(
+        event_data=event_v2_data, coordinates="wyscout"
+    )
+    assert dataset.records[2].coordinates == Point(29.0, 6.0)
+    dataset = wyscout.load_event(
+        event_data=event_v3_data, coordinates="wyscout"
+    )
+    assert dataset.records[2].coordinates == Point(32.0, 56.0)
+
+
+def test_load_is_deprecated_alias_of_load_event(event_v2_data: Path):
+    with pytest.warns(DeprecationWarning, match="wyscout.load_event"):
+        dataset = wyscout.load(event_data=event_v2_data, coordinates="wyscout")
+    expected = wyscout.load_event(
+        event_data=event_v2_data, coordinates="wyscout"
+    )
+    assert len(dataset.records) == len(expected.records)
+    assert dataset.records[2].coordinates == expected.records[2].coordinates
+
+
 class TestWyscoutV2:
     """Tests related to deserialization of Wyscout V2 data."""
 
